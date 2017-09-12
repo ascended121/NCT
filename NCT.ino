@@ -6,58 +6,71 @@ This code is intended to read from the GPS, log to the SD card, and ocassionally
 message with the location data.
 */
 
+/*
+ * Includes
+ */
 // SD includes
 #include <SPI.h>
 #include <SD.h>
 // GPS includes
 #include <Adafruit_GPS.h>
-#include <SoftwareSerial.h>
+//#include <SoftwareSerial.h>
 // FONA includes
 #include "Adafruit_FONA.h"
 // other includes
 #include <EEPROM.h>
 
-#define PIN_DEBUG_RX 0
-#define PIN_DEBUG_TX 1
-#define PIN_FONA_INTRPT 2
+/*
+ * Defines
+ */
+// pin aliases
+#define PIN_GPS_RX 0
+#define PIN_GPS_TX 1
+#define PIN_FONA_INTRPT 2  // RI pin
 #define PIN_SD_CS 4
-#define PIN_FONA_RST 5
-#define PIN_GPS_RX 7
-#define PIN_GPS_TX 8
-#define PIN_FONA_RX 9
-#define PIN_FONA_TX 10
+#define PIN_FONA_RST 5 // Key pin
 #define PIN_SD_MOSI 11
 #define PIN_SD_MISO 12
 #define PIN_SD_CLKSO 13
+#define PIN_FONA_RX 14
+#define PIN_FONA_TX 15
+#define PIN_DEBUG_RX 16
+#define PIN_DEBUG_TX 17
 
+// program parameters
 #define GPSECHO false
 #define MAX_AUTH_COMMANDERS 5
 #define MAX_SMS_RECIPIENTS 5
 #define SMS_BUFF_SIZE 140
 
-//// Serial object aliases
+// Serial object aliases
 // so that the user doesn't have to keep track of which is which
-#define debugSerial Serial
+#define debugSerial Serial2
+#define fonaSerial Serial3
+#define gpsSerial Serial
 
-// this is a large buffer for replies
-char replybuffer[255];
-
-// declare and intitialize fona objects
-SoftwareSerial fonaSerial = SoftwareSerial(PIN_FONA_TX, PIN_FONA_RX);
+/* 
+ *  Declare and intitialize objects
+ */
+//SoftwareSerial fonaSerial = SoftwareSerial(PIN_FONA_TX, PIN_FONA_RX);
 //SoftwareSerial *fonaSerial = &fonaSS;
 Adafruit_FONA fona = Adafruit_FONA(PIN_FONA_RST);
 
 // declare and intitialize gps objects
-SoftwareSerial gpsSerial = SoftwareSerial(PIN_GPS_TX, PIN_GPS_RX);
+//SoftwareSerial gpsSerial = SoftwareSerial(PIN_GPS_TX, PIN_GPS_RX);
 //SoftwareSerial *gpsSerial = &gpsSS;
 Adafruit_GPS GPS(&gpsSerial);
 
 // declare and intitialize sd objects
 File dataFile;
 
-// Global Variables
+/* 
+ *  Global Variables
+ */
 // this keeps track of whether we're using the interrupt
 // off by default!
+// this is a large buffer for replies
+char replybuffer[255];
 boolean usingInterrupt = false;
 uint32_t timer = millis();
 uint32_t smsPeriod_sec = 60*5;
@@ -69,8 +82,11 @@ char authCommanderList[MAX_AUTH_COMMANDERS][25];
 volatile boolean smsAvail = false;
 boolean sendSms = true;
 boolean forceSendSms = false;
- 
-// Function prototypes
+uint16_t smsSeqCtr = 0;
+
+/* 
+ *  Function prototypes
+ */
 void useInterrupt(boolean);
 uint8_t readline(char *buff, uint8_t maxbuff, uint16_t timeout = 0);
 void setupSd();
@@ -85,6 +101,12 @@ boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num);
 boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num);
 boolean clearList(char list[][25], uint8_t list_len);
 
+
+/*
+ * Setup
+ * This function is responsible for initializing and configuring the GPS modules,
+ * the FONA module, and the SD logging
+ */
 void setup() {
 
   // Debug serial
@@ -99,24 +121,30 @@ void setup() {
 
   setupNums();
   
+  // Attach an interrupt to the ISR vector
+  attachInterrupt(0, smsAvailIsr, LOW);
+  
   // enable the GPS reading interrupt
   useInterrupt(true);
 
-  // Attach an interrupt to the ISR vector
-  attachInterrupt(0, smsAvailIsr, LOW);
 }
 
+/*
+ * Loop function executes the functionality of the program
+ * The GPS is read via an interrupt and so this function just processes the result
+ * once its been fully read. The FONA also produces an interrupt when it receives an
+ * SMS message and so don't need to be polled.
+ */
 void loop() {
 
+  // flag indicating if there was new GPS data produced this cycle which has been processed
   boolean parsed_data = false;
-  uint16_t fonaBattVoltage = 0;
   
   /*
    * First, process the GPS data. The receiving of the actual data is handled by
    * the timer-based interrupt which deposits the string into a buffer. Then, once
    * the whole string has been received, we process it below.
    */
-  
   // if a sentence is received (known because we can check the checksum), parse it...
   if (GPS.newNMEAreceived()) {
 
@@ -129,19 +157,24 @@ void loop() {
    * The interrupt routine will record if an SMS has been received, and the
    * SMS will be read and processed here
    */
-  fona.getBattVoltage(&fonaBattVoltage);
   if (smsAvail){
-    int slot = 0;            //this will be the slot number of the SMS
+    
+    // iterate through the SMS slots on the FONA
+    int slot = 0;     
+
+    // keep track of how many messages have been read
     uint8_t smsRead = 0;
+    
     while (smsRead < fona.getNumSMS()) {
         uint16_t smslen;
      
         debugSerial.print(F("\n\rReading SMS #")); 
         debugSerial.println(slot);
-     
-        uint8_t len = fona.readSMS(slot, smsBuffer, SMS_BUFF_SIZE, &smslen); // pass in buffer and max len!
-        // if the length is zero, its a special case where the index number is higher
-        // so increase the max we'll look at!
+
+        // read the SMS into a buffer
+        uint8_t len = fona.readSMS(slot, smsBuffer, SMS_BUFF_SIZE, &smslen); 
+        
+        // if the length is zero, this is an empty slot and we need to keep reading
         if (len == 0) {
           debugSerial.println(F("[empty slot]"));
           continue;
@@ -150,15 +183,18 @@ void loop() {
         else{
           smsRead++;
         }
+
+        // get the phone number which sent the SMS
         if (! fona.getSMSSender(slot, sender, sizeof(sender))) {
-         // failed to get the sender?
-         sender[0] = 0;
+          // failed to get the sender?
+          sender[0] = 0;
         }
 
+        // process the SMS message we received
         processSmsCmd();
      
         // delete the original msg after it is processed, otherwise, we will fill 
-        //  up all the slots and then we won't be able to receive SMS anymore
+        //  up all the SMS slots and then we won't be able to receive SMS anymore
         if (fona.deleteSMS(slot)) {
           debugSerial.println(F("OK!"));
         } else {
@@ -171,20 +207,29 @@ void loop() {
 
   /*
    * Send a telemetry message
+   * An SMS with the payload telemetry will be sent if a command to force an
+   * SMS send has been received or if the SMS messages have been enabled and 
+   * enough time has ellapsed from the previous message
    */
   if(forceSendSms || sendSms && (millis() - timer > smsPeriod_sec*1000)){
+    
+    // variable to store battery voltage
+    uint16_t fonaBattVoltage = 0;
+    
+    fona.getBattVoltage(&fonaBattVoltage);
 
     // note that if you try to make too long of a message, it will be truncated
-    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%d:%d:%d - Lat: %f deg, Lon: %f deg, Alt: %f ft, Heading: %f deg, Speed: %f mph, FixQual: %d, Sats: %d, BattV: %f mV", 
-    GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage);
+    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%04d %04d/%02d/%02d %02d:%02d:%02d - Lat: %8.4f deg, Lon: %8.4f deg, Alt: %06d ft, Heading: %5.3f deg, Speed: %5.2f mph, FixQual: %02d, Sats: %02d, BattV: %05d mV, Log: %01d", 
+    smsSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, (boolean)dataFile);
 
-    // send the message to all recipients
+    // send the message to all recipients in our table
     for(uint8_t i = 0; i < MAX_SMS_RECIPIENTS; i++){
       fona.sendSMS(smsRecipientsList[i], smsSendBuffer);
     }
 
     // reset the force flag
     forceSendSms = false;
+    smsSeqCtr++;
   }
 
   /*
@@ -202,7 +247,7 @@ void loop() {
   }
 }
 
-
+/*
 void print_GPS_data(){
     debugSerial.print("\nTime: ");
     debugSerial.print(GPS.hour, DEC); debugSerial.print(':');
@@ -231,12 +276,22 @@ void print_GPS_data(){
       debugSerial.print("Satellites: "); debugSerial.println((int)GPS.satellites);
     }
 }
+*/
 
+/*
+ * smsAvailIsr()
+ * This method is called when the FONA trips an interrupt indicating it has a 
+ * new SMS. All it does is set a flag so that next cycle the SMS will be read
+ */
 void smsAvailIsr() {
   // just set a flag so that the next loop can read the SMS
   smsAvail = true;
 }
 
+/*
+ * setupGps()
+ * Setup the GPS serial and configure the GPS to output solutions
+ */
 void setupGps(){
   // GPS serial
   // connect at 115200 so we can read the GPS fast enough and echo without dropping chars
@@ -251,7 +306,11 @@ void setupGps(){
   GPS.sendCommand(PGCMD_ANTENNA);             // something about antenna state
 }
 
-
+/*
+ * setupFona()
+ * Setup the GPS and the serial, also configure the FONA to produce an interrupt
+ * when it receives an SMS
+ */
 void setupFona(){
   // make it slow so its easy to read!
   fonaSerial.begin(4800);
@@ -268,6 +327,8 @@ void setupFona(){
     debugSerial.println(imei);
   }
 
+  // do we need to unlock the sim card
+
   //fonaSerial.print("AT+CNMI=2,1\r\n");  //set up the FONA to send a +CMTI notification when an SMS is received
 
   // turn on RI pin change on incoming SMS!
@@ -278,6 +339,10 @@ void setupFona(){
   debugSerial.println("FONA Ready");
 }
 
+/*
+ * setupSd()
+ * Setup the SD card for logging and open the logfile
+ */
 void setupSd(){
   // see if the card is present and can be initialized:
   if (!SD.begin(PIN_SD_CS)) {
@@ -290,7 +355,10 @@ void setupSd(){
   dataFile = SD.open("datalog.txt", FILE_WRITE);
 }
 
-// Interrupt is called once a millisecond, looks for any new GPS data, and stores it
+/*
+ * signal()
+ * Interrupt is called once a millisecond, looks for any new GPS data, and stores it
+ */
 SIGNAL(TIMER0_COMPA_vect) {
   char c = GPS.read();
   // if you want to debug, this is a good time to do it!
@@ -302,6 +370,10 @@ SIGNAL(TIMER0_COMPA_vect) {
 #endif
 }
 
+/*
+ * useInterrupt()
+ * Enable the interrupt to read GPS data in the background
+ */
 void useInterrupt(boolean v) {
   if (v) {
     // Timer0 is already used for millis() - we'll just interrupt somewhere
@@ -316,6 +388,10 @@ void useInterrupt(boolean v) {
   }
 }
 
+/*
+ * isAuthSender()
+ * Function which checks if a given number is in the list of authorized senders
+ */
 boolean isAuthSender(char *sender){
   for (uint8_t i = 0; i < MAX_AUTH_COMMANDERS; i++){
     if(strcmp(authCommanderList[i],sender)){
@@ -325,44 +401,131 @@ boolean isAuthSender(char *sender){
   return false;
 }
 
+/*
+ * processSmsCmd()
+ * Parses the contents of an SMS message and execute any contained commands
+ */
 void processSmsCmd(){
-  //smsBuffer[250];
-  //sender[25];
-  // Implement Enable SMS command
-  if(strcasestr(smsBuffer,"enable") && strcasestr(smsBuffer,"sms") && isAuthSender(sender)){
+
+  // flag to track if we found a command so that we can throw an error if not
+  boolean cmdExed = false;
+
+  // counter to track location that substrings were located
+  uint8_t str_loc = 0;
+
+  // cell number extracted
+  char numberStr[11];
+  
+  /* Implement Enable SMS command
+   *  Syntax: "enable sms", case insensitive
+   *  This command executes by setting a flag so that the main loop doesnt send
+   *  an SMS message
+   */
+  if(strcasestr(smsBuffer,"enable sms") && isAuthSender(sender)){
     sendSms = true;
+    cmdExed = true;
   }
-  // Implement Disable SMS command
-  if(strcasestr(smsBuffer,"disable") && strcasestr(smsBuffer,"sms") && isAuthSender(sender)){
+  /* Implement Disable SMS command
+   *  Syntax: "disable sms", case insensitive
+   *  This command executes by setting a flag so that the main loop doesnt send
+   *  an SMS message
+   */
+  if(strcasestr(smsBuffer,"disable sms") && isAuthSender(sender)){
     sendSms = false;
+    cmdExed = true;
   }
-  // Implement SMS Frequency command
-  if(strcasestr(smsBuffer,"sms") && strcasestr(smsBuffer,"freq") && isAuthSender(sender)){
+  /* Implement SMS Frequency command
+   *  Syntax: "sms freq <frequency>", case insensitive, frequency is an integer
+   *  This command is executed by changing the loop delay variable so that the loop
+   *  executes faster.
+   */
+  //
+  if(strcasestr(smsBuffer,"sms freq") && isAuthSender(sender)){
     // Fixme: Get value from message
     smsPeriod_sec = 60;
+    cmdExed = true;
   }
-  // Implement Force Send command
-  if(strcasestr(smsBuffer,"remove") && strcasestr(smsBuffer,"sms") && isAuthSender(sender)){
+  /* Implement Force Send command
+   *  Syntax: "force send", case insensitive
+   *  This command is implemented by setting a flag such that on the next loop cycle
+   *  a message will be sent after reading the sensors
+   */
+  if(strcasestr(smsBuffer,"force send") && isAuthSender(sender)){
     forceSendSms = true;
+    cmdExed = true;
   }
-  // Implement Add Auth Num command
-  if(strcasestr(smsBuffer,"add") && strcasestr(smsBuffer,"auth") && isAuthSender(sender)){
-    addAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, sender, "auth commanders list");
+  /* Implement Add Auth Num command
+   *  Syntax: "add auth <cell_number>", case insensitive, cell number with dash delimiters
+   *  This command adds a new cell number to the list of phone numbers which are permitted to 
+   *  command this payload. A response SMS will be sent back to the user to confirm the command.
+   */
+  if((str_loc = strcasestr(smsBuffer,"add auth")) && isAuthSender(sender)){
+    extractPhoneNum(numberStr);
+    addAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, numberStr, "auth commanders list");
+    cmdExed = true;
   }
-  // Implement Remove Auth Num command
-  if(strcasestr(smsBuffer,"remove") && strcasestr(smsBuffer,"auth") && isAuthSender(sender)){
-    removeAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, sender, "auth commanders list");
+  /* Implement Remove Auth Num command
+   *  Syntax: "remove auth <cell_number>", case insensitive, cell number with dash delimiters
+   */
+  if((str_loc = strcasestr(smsBuffer,"remove auth")) && isAuthSender(sender)){
+    extractPhoneNum(numberStr);
+    removeAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, numberStr, "auth commanders list");
+    cmdExed = true;
   }
-  // Implement Add SMS Recipient command
-  if(strcasestr(smsBuffer,"add") && strcasestr(smsBuffer,"sms") && isAuthSender(sender)){
-    addAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, sender, "sms recipients list");
+  /* Implement Add SMS Recipient command
+   *  Syntax: "add sms <cell_number>", case insensitive, cell number with dash delimiters
+   */
+  if((str_loc = strcasestr(smsBuffer,"add sms")) && isAuthSender(sender)){
+    extractPhoneNum(numberStr);
+    addAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, numberStr, "sms recipients list");
+    cmdExed = true;
   }
-  // Implement Remove SMS Recipient command
-  if(strcasestr(smsBuffer,"remove") && strcasestr(smsBuffer,"sms") && isAuthSender(sender)){
-    removeAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, sender, "sms recipients list");
+  /* Implement Remove SMS Recipient command
+   *  Syntax: "remove sms <cell_number>", case insensitive, cell number with dash delimiters
+   */
+  if((str_loc = strcasestr(smsBuffer,"remove sms")) && isAuthSender(sender)){
+    extractPhoneNum(numberStr);
+    removeAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, numberStr, "sms recipients list");
+    cmdExed = true;
+  }
+  // Send a message back if the SMS didn't contain a valid command so that the user knows
+  if(~cmdExed){
+    fona.sendSMS(sender, "Unrecognized command");
   }
 }
 
+/*
+ * extractPhoneNum()
+ *  Extracts a phone number of the format XXX-XXX-XXXX from a string
+ */
+void extractPhoneNum(char *numberStr){
+  // cell number sections
+  uint16_t firstInt = 0;
+  uint16_t secondInt = 0;
+  uint16_t thirdInt = 0;
+  // strings containing the number sections
+  char firstStr[4];
+  char secondStr[4];
+  char thirdStr[5];
+
+  // extract the number sections from the string
+  sscanf(smsBuffer,"%d-%d-%d", firstInt, secondInt, thirdInt);
+
+  // convert the int back to strings
+  itoa(firstInt, firstStr, 10);
+  itoa(firstInt, secondStr, 10);
+  itoa(firstInt, thirdStr, 10);
+
+  // then merge the sections to form the full number
+  strcpy(numberStr, firstStr);
+  strcat(numberStr, secondStr);
+  strcat(numberStr, thirdStr);
+}
+
+/*
+ * setupNums()
+ * Initalizes the SMS recipients list and the authorized commanders lists
+ */
 void setupNums(){
   //EEPROM.length()
   //value = EEPROM.read(address);
@@ -377,6 +540,10 @@ void setupNums(){
 
 }
 
+/*
+ * addNumListEntry()
+ * Add an entry to the specified list
+ */
 boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num){
   // loop through the list
   for( uint8_t i = 0; i < list_len; i++){
@@ -391,6 +558,10 @@ boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num){
   return false; 
 }
 
+/*
+ * clearList()
+ * Clear all entries from the given list
+ */
 boolean clearList(char list[][25], uint8_t list_len){
   // loop through the list
   for( uint8_t i = 0; i < list_len; i++){
@@ -399,6 +570,10 @@ boolean clearList(char list[][25], uint8_t list_len){
   return true; 
 }
 
+/*
+ * addAndRespond()
+ * Adds an entry to a specified list and send an SMS message back to the user to confirm
+ */
 void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_name){
   if(addNumListEntry(list, list_len, add_num)){
     // send SMS indicating success to commander and the new authorized commander
@@ -414,6 +589,10 @@ void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_
   }
 }
 
+/*
+ * removeAndRespond()
+ * Removes an entry from the specified list and notifies the user
+ */
 void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char* list_name){
   if(removeNumListEntry(list, list_len, remove_num)){
     // send SMS indicating success
@@ -429,6 +608,11 @@ void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char*
   }
 }
 
+/*
+ * removeNumListEntry()
+ * Removes an entry from the specified list. Note, this does not protect against 
+ * removing everyone from a list, which could be a problem for the AuthCommand list.
+ */
 boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num){
   // loop through the list
   for( uint8_t i = 0; i < list_len; i++){
@@ -442,4 +626,6 @@ boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num){
   // if we made it here we didn't find them in the list, return failure
   return false;
 }
+
+
 
