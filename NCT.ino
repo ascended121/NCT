@@ -155,7 +155,7 @@ void setup() {
 void loop() {
 
   // flag indicating if there was new GPS data produced this cycle which has been processed
-  boolean parsed_data = false;
+  boolean parsedGpsData = false;
   
   /*
    * First, process the GPS data. The receiving of the actual data is handled by
@@ -167,7 +167,7 @@ void loop() {
 
     // parse the NMEA string and read the variables into the GPS object's properties
     // this also sets the newNMEAreceived() flag to false
-    parsed_data = GPS.parse(GPS.lastNMEA()); 
+    parsedGpsData = GPS.parse(GPS.lastNMEA()); 
     debugSerial.println("Parsed GPS data!");
   }
 
@@ -186,10 +186,13 @@ void loop() {
     uint8_t smsRead = 0;
     
     while (smsRead < fona.getNumSMS()) {
-        uint16_t smslen;
      
         debugSerial.print(F("\n\rReading SMS #")); 
         debugSerial.println(slot);
+
+        // this variable isn't actually used, but we need a buffer to read the 
+        // value into
+        uint16_t smslen;
 
         // read the SMS into a buffer
         uint8_t len = fona.readSMS(slot, smsBuffer, SMS_BUFF_SIZE, &smslen); 
@@ -225,23 +228,35 @@ void loop() {
     }
   }
 
+  // determine if we need to send a text message this cycle
+  boolean sendSMS = (forceSendSms || smsEnableFlag && (millis() - timer > smsPeriod_sec*1000));
+
+  /*
+   * If we're either sending an SMS this cycle or have new GPS data, then create the string to be 
+   * sent/logged.
+   */
+  if(sendSMS || parsedGpsData){
+    
+    // variable to store battery voltage
+    uint16_t fonaBattVoltage = 0;
+
+    fona.getBattVoltage(&fonaBattVoltage);
+    
+    // note that if you try to make too long of a message, it will be truncated
+    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%04d %04d/%02d/%02d %02d:%02d:%02d-Lat:%8.4fdeg,Lon:%8.4fdeg,Alt:%06dft,Head:%5.3fdeg,Spd:%5.2fmph,FxQual:%02d,Sat:%02d,BattV:%05dmV,Log:%01d", 
+    smsSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, (boolean)dataFile);
+    debugSerial.println(smsSendBuffer);
+
+  }
+
   /*
    * Send a telemetry message
    * An SMS with the payload telemetry will be sent if a command to force an
    * SMS send has been received or if the SMS messages have been enabled and 
    * enough time has ellapsed from the previous message
    */
-  if(forceSendSms || smsEnableFlag && (millis() - timer > smsPeriod_sec*1000)){
-    
-    // variable to store battery voltage
-    uint16_t fonaBattVoltage = 0;
-    
-    fona.getBattVoltage(&fonaBattVoltage);
+  if(sendSMS){
 
-    // note that if you try to make too long of a message, it will be truncated
-    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%04d %04d/%02d/%02d %02d:%02d:%02d - Lat: %8.4f deg, Lon: %8.4f deg, Alt: %06d ft, Heading: %5.3f deg, Speed: %5.2f mph, FixQual: %02d, Sats: %02d, BattV: %05d mV, Log: %01d", 
-    smsSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, (boolean)dataFile);
-    debugSerial.println(smsSendBuffer);
     // send the message to all recipients in our table
     for(uint8_t i = 0; i < MAX_SMS_RECIPIENTS; i++){
       fona.sendSMS(smsRecipientsList[i], smsSendBuffer);
@@ -255,16 +270,16 @@ void loop() {
   /*
    * Log data to SD card
    */
-  if (dataFile) {
-    if (parsed_data){  
-     // log the data using the same message we just sent via SMS
-     dataFile.print(smsSendBuffer); 
-     dataFile.flush();
+  if (parsedGpsData){  
+    if (dataFile) {
+      // log the data using the same message we just sent via SMS
+      dataFile.println(smsSendBuffer); 
+      dataFile.flush();
     }
-  }
-  // if the file isn't open, pop up an error:
-  else {
-    debugSerial.println(F("error opening datalog.txt"));
+    // if the file isn't open, pop up an error:
+    else {
+      debugSerial.println(F("error opening datalog.txt"));
+    }
   }
 }
 
