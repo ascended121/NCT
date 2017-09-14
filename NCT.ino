@@ -233,7 +233,8 @@ void loop() {
     smsAvail = false;
     
     // iterate through the SMS slots on the FONA
-    int slot = 0;     
+    // Note: Apparently the module starts numbering SMS at 1
+    int slot = 1;     
 
     // because slots can be empty, keep track of how many messages have been read
     uint8_t numSmsRead = 0;
@@ -457,7 +458,8 @@ void setupFona(){
     debugSerial.println(" stored SMS...");
   
     uint8_t numSmsDel = 0;
-    uint8_t slot = 0;
+    // Note: Apparently the module starts numbering SMS at 1
+    uint8_t slot = 1;
       
     while (numSmsDel < totalSms && slot < 30) {
      
