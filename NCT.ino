@@ -37,22 +37,23 @@ message with the location data.
  * Defines
  */
 // pin aliases
-#define PIN_FONA_INTRPT  2  // FONA RI pin
-#define PIN_FONA_KEY     5  // FONA Key pin
-#define PIN_FONA_RST     6  // FONA Rst pin
-#define PIN_GPS_RX       8  // Mega RX3
-#define PIN_GPS_TX       7  // Mega RX3
+#define PIN_DEBUG_RX     0 // Mega TX0
+#define PIN_DEBUG_TX     1 // Mega RX0
+#define PIN_FONA_RST     2 // FONA Rst pin
+#define PIN_FONA_INTRPT  3 // FONA RI pin
+#define PIN_FONA_KEY     5 // FONA Key pin
+#define PIN_GPS_RX       8 // Mega RX3
+#define PIN_GPS_TX       7 // Mega RX3
 #define PIN_SD_CS        10 
 #define PIN_SD_MOSI      11
 #define PIN_SD_MISO      12
 #define PIN_SD_CLKSO     13
 #define PIN_FONA_RX      14 // Mega TX2
 #define PIN_FONA_TX      15 // Mega RX2
-#define PIN_DEBUG_RX     16 // Mega TX1
-#define PIN_DEBUG_TX     17 // Mega RX1
 
 // constants
-#define SEC_IN_MIN       60
+#define MSEC_PER_SEC       1000
+#define MSEC_PER_MIN       60*MSEC_PER_SEC
 
 // FONA Network status
 #define FONA_NET_NOTREG       0
@@ -93,21 +94,32 @@ File dataFile;
  *  Global Variables
  */
 boolean   usingGpsInterrupt   = false;          // this will be enabled once the GPS has been configured
-uint32_t  smsTimer            = millis();       // initalize to current time
-uint32_t  smsPeriod_sec       = 5*SEC_IN_MIN;   // default to 5min between SMS
-char      smsRcvBuffer[SMS_BUFF_SIZE];          // buffer to store received SMS's
-char      smsSendBuffer[SMS_BUFF_SIZE];         // buffer in which to create outgoing SMS's
-char      logBuffer[LOG_BUFF_SIZE];             // buffer in which to create string to be logged
-char      sender[25];                           // buffer to store phone number of SMS sender
-char      smsRecipientsList[MAX_SMS_RECIPIENTS][25];   // list of phone numbers to send SMS's to 
-char      authCommanderList[MAX_AUTH_COMMANDERS][25];  // list of phone numbers to accept commands from
-volatile boolean smsAvail   = false;            // flag, set by the SMS interrupt, to read an SMS
-boolean   smsEnableFlag     = true;             // flag which enables the sending of telemetry SMS's to the recipients
-boolean   forceSendSms      = false;            // flag which forces the sending of a telemetry SMS to the recipients
 uint16_t  smsSeqCtr         = 0;                // SMS sequence counter
 uint16_t  logSeqCtr         = 0;                // Log file entry sequence counter
 uint8_t   netStatus         = FONA_NET_UNKNOWN; // status of connection to cell network
 uint16_t  fonaBattVoltage   = 0;                // battery voltage level
+uint8_t   fonaRssi          = 0;                // signal strength
+
+// lists
+char      smsRecipientsList[MAX_SMS_RECIPIENTS][25];   // list of phone numbers to send SMS's to 
+char      authCommanderList[MAX_AUTH_COMMANDERS][25];  // list of phone numbers to accept commands from
+
+// timers
+uint32_t  smsPeriod_msec       = 5*MSEC_PER_MIN;   // default to 5min between SMS
+uint32_t  fonaStatusPeriod_msec= 10*MSEC_PER_SEC;  // default to 10sec between fona status checks
+uint32_t  smsTimer             = 0;                // initalize to zero to make this trigger on first loop
+uint32_t  fonaStatusTimer      = 0;                // initalize to zero to make this trigger on first loop
+
+// buffers
+char      smsRcvBuffer[SMS_BUFF_SIZE];          // buffer to store received SMS's
+char      smsSendBuffer[SMS_BUFF_SIZE];         // buffer in which to create outgoing SMS's
+char      logBuffer[LOG_BUFF_SIZE];             // buffer in which to create string to be logged
+char      sender[25];                           // buffer to store phone number of SMS sender
+
+// program control flags
+volatile boolean smsAvail   = false;            // flag, set by the SMS interrupt, to read an SMS
+boolean   smsEnableFlag     = false;             // flag which enables the sending of telemetry SMS's to the recipients
+boolean   forceSendSms      = false;            // flag which forces the sending of a telemetry SMS to the recipients
  
 /* 
  *  Function prototypes
@@ -158,7 +170,7 @@ void setup() {
   setupLists();
   
   // Attach an interrupt to the ISR vector to trigger checking for SMSs
-  attachInterrupt(0, smsAvailIsr, LOW);
+  attachInterrupt(digitalPinToInterrupt(PIN_FONA_INTRPT), smsAvailIsr, LOW);
   
 }
 
@@ -173,8 +185,19 @@ void loop() {
   // flag indicating if there was new GPS data produced this cycle which has been processed
   boolean parsedGpsData = false;
 
-  // get the network status we'll use this cycle
-  netStatus = fona.getNetworkStatus();
+  /*
+   * Since the baud to the FONA is so slow, don't want to be requesting data we dont have to, 
+   * so only get battery voltage and network status when we need it
+   */
+  if(millis() - fonaStatusTimer > fonaStatusPeriod_msec){
+    // update the timer
+    fonaStatusTimer = millis();
+
+    // get the data
+    fona.getBattVoltage(&fonaBattVoltage);
+    netStatus = fona.getNetworkStatus();
+    fonaRssi = fona.getRSSI();
+  }
   
   /*
    * First, process the GPS data. The receiving of the actual data is handled by
@@ -198,12 +221,19 @@ void loop() {
    */
   if (smsAvail){
 
-    debugSerial.println("Reading SMS");
+    uint8_t totalSms = fona.getNumSMS();
+
+    debugSerial.print("Reading ");
+    debugSerial.print(totalSms);
+    debugSerial.println(" SMS");
+
+    // reset the flag
+    smsAvail = false;
     
     // iterate through the SMS slots on the FONA
     int slot = 0;     
 
-    // because slots can be empty keep track of how many messages have been read
+    // because slots can be empty, keep track of how many messages have been read
     uint8_t numSmsRead = 0;
     
     while (numSmsRead < fona.getNumSMS()) {
@@ -221,7 +251,6 @@ void loop() {
         // if the length is zero, this is an empty slot and we need to keep reading
         if (len == 0) {
           debugSerial.println(F("[empty slot]"));
-          continue;
         }
         // otherwise, we read a message
         else{
@@ -244,8 +273,8 @@ void loop() {
             debugSerial.print(F("Couldn't delete SMS in slot "));
             debugSerial.println(slot);
           }
-          slot++;
         } //if (len == 0)
+        slot++;
     } // while (numSmsRead < fona.getNumSMS())
   } // if (smsAvail)
 
@@ -254,15 +283,7 @@ void loop() {
    * SMS send has been received or if the SMS messages have been enabled and 
    * enough time has ellapsed from the previous message
    */
-  boolean sendSms = forceSendSms || smsEnableFlag && (millis() - smsTimer > smsPeriod_sec*1000);
-
-  /*
-   * Since the baud to the FONA is so slow, don't want to be requesting data we dont have to, so
-   * only get battery voltage when we're going to use it
-   */
-  if(sendSms || parsedGpsData){
-    fona.getBattVoltage(&fonaBattVoltage);
-  }
+  boolean sendSms = forceSendSms || (smsEnableFlag && (millis() - smsTimer > smsPeriod_msec));
 
   /*
    * Send a telemetry message
@@ -270,11 +291,18 @@ void loop() {
    */
   if(sendSms && haveNetwork()){
 
-    // note that if you try to make too long of a message, it will be truncated
+    // update timer
+    smsTimer = millis();
+
+    /*
+     * Create the SMS to send
+     * note that if you try to make too long of a message, it will be truncated
+     */
     snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%04d %04d/%02d/%02d %02d:%02d:%02d-Lat:%8.4fdeg,Lon:%8.4fdeg,Alt:%06dft,Head:%5.3fdeg,Spd:%5.2fmph,FxQual:%02d,Sat:%02d,Batt:%05dmV,Log:%01d,RSSI:%03d", 
     smsSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, 
     GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, 
-    (boolean)dataFile, fona.getRSSI());
+    (boolean)dataFile, fonaRssi);
+    debugSerial.print(F("SMS: "));
     debugSerial.println(smsSendBuffer);
 
     // send the message to all recipients in our table
@@ -293,10 +321,11 @@ void loop() {
   if (parsedGpsData){  
 
     // note that if you try to make too long of a message, it will be truncated
-    snprintf(logBuffer, LOG_BUFF_SIZE, "%04d,%04d,%02d,%02d,%02d,%02d,%02d,%8.4f,%8.4f,%06d,%5.3f,%5.2,%02d,%02d,%05d,%01d", 
+    snprintf(logBuffer, LOG_BUFF_SIZE, "%04d,%02d,%02d,%02d,%02d,%02d,%02d,%8.4f,%8.4f,%06d,%5.3f,%5.2f,%02d,%02d,%05d,%01d", 
     logSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, 
     GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, 
-    (boolean)dataFile, fona.getRSSI(), fona.getNetworkStatus());
+    (boolean)dataFile, fonaRssi, netStatus);
+    debugSerial.print(F("Log: "));
     debugSerial.println(logBuffer);
     
     if (dataFile) {
@@ -380,8 +409,11 @@ void setupFona(){
   debugSerial.println("Begin FONA initalization...");
 
   // bring the key pin low to turn on the module
+  debugSerial.println("Turning on FONA...");
   pinMode(PIN_FONA_KEY, OUTPUT);
   digitalWrite(PIN_FONA_KEY, LOW);
+  delay(2000);
+  digitalWrite(PIN_FONA_KEY, HIGH);
   
   // make it slow so its easy to read!
   fonaSerial.begin(4800);
@@ -392,23 +424,57 @@ void setupFona(){
     debugSerial.println(F("FONA is OK"));
   }
 
+  delay(10);
+
   // Print SIM card IMEI number.
   char imei[16] = {0}; // MUST use a 16 character buffer for IMEI!
   uint8_t imeiLen = fona.getIMEI(imei);
-  if (imeiLen > 0) {
+  //if (imeiLen > 0) {
     debugSerial.print("SIM card IMEI: ");
     debugSerial.println(imei);
-  }
+  //}
 
   // do we need to unlock the sim card?
-
-  //fonaSerial.print("AT+CNMI=2,1\r\n");  //set up the FONA to send a +CMTI notification when an SMS is received
 
   // turn on RI pin change on incoming SMS!
   pinMode(PIN_FONA_INTRPT, INPUT);
   digitalWrite(PIN_FONA_INTRPT, HIGH); // turn on pullup on RI
-  //fona.sendCheckReply(F("AT+CFGRI=1"), F("OK"));
   fona.setSMSInterrupt(1);
+
+  //fona.sendSMS("6033218095", "Initialized!");
+
+  delay(1000);
+  /*
+   * Clear the stored SMS's so that we don't fill up
+   */
+  uint8_t totalSms = fona.getNumSMS();
+
+  if(totalSms > 0){
+    debugSerial.print("Deleting ");
+    debugSerial.print(totalSms);
+    debugSerial.println(" stored SMS...");
+  
+    uint8_t numSmsDel = 0;
+    uint8_t slot = 0;
+      
+    while (numSmsDel < totalSms && slot < 30) {
+     
+        debugSerial.print(F("Deleting SMS #"));
+        debugSerial.print(numSmsDel);
+        debugSerial.print(" from slot"); 
+        debugSerial.println(slot);
+  
+        if(fona.deleteSMS(slot)){
+          numSmsDel++;
+        }
+        else{
+          debugSerial.println("Error deleting SMS");
+        }
+      slot++;
+    }
+  }
+
+  
   
   debugSerial.println("End FONA initalization...");
 
@@ -552,9 +618,9 @@ void processSmsCmd(){
   //
   else if(strcasestr(smsRcvBuffer,"sms freq")){
     uint16_t period = 0;
-    sscanf(smsBuffer,"%d", period);
+    sscanf(smsRcvBuffer,"%d", period);
     if(period > 10 && period < 600){
-      smsPeriod_sec = period;
+      smsPeriod_msec = period;
       snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Set period value to %d", period);
       sendSmsIfNetwork(sender, smsSendBuffer);
     }
@@ -609,30 +675,21 @@ void processSmsCmd(){
 
 /*
  * extractPhoneNum()
- *  Extracts a phone number of the format XXX-XXX-XXXX from a string
+ *  Extracts a phone number of the format XXXXXXXXXX from a string
  */
 void extractPhoneNum(char *numberStr){
-  // cell number sections
-  uint16_t firstInt = 0;
-  uint16_t secondInt = 0;
-  uint16_t thirdInt = 0;
-  // strings containing the number sections
-  char firstStr[4];
-  char secondStr[4];
-  char thirdStr[5];
 
-  // extract the number sections from the string
-  sscanf(smsRcvBuffer,"%d-%d-%d", firstInt, secondInt, thirdInt);
+  uint8_t start_loc = 0;
+  // loop through until we find a digit, start_loc now has that position
+  while(!isdigit(smsRcvBuffer[++start_loc]));
 
-  // convert the int back to strings
-  itoa(firstInt, firstStr, 10);
-  itoa(firstInt, secondStr, 10);
-  itoa(firstInt, thirdStr, 10);
+  uint8_t end_loc = start_loc;
+  // loop through until we find something other than a digit, end_loc now has that position
+  while(isdigit(smsRcvBuffer[end_loc++]));
 
-  // then merge the sections to form the full number
-  strcpy(numberStr, firstStr);
-  strcat(numberStr, secondStr);
-  strcat(numberStr, thirdStr);
+  // copy the portion of the string between start_loc and end_loc into the response string
+  strncpy( numberStr, smsRcvBuffer+start_loc, end_loc-start_loc );
+
 }
 
 /*
@@ -646,11 +703,11 @@ void setupLists(){
   
   // populate the recipients list
   clearList(smsRecipientsList, MAX_SMS_RECIPIENTS);
-  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, "+16033218095");
+  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, "6033218095");
 
   // populate the authorized commanders list
   clearList(authCommanderList, MAX_AUTH_COMMANDERS);
-  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, "+16033218095");
+  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, "6033218095");
 
 }
 
@@ -664,9 +721,10 @@ boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num){
   // loop through the list
   for( uint8_t i = 0; i < list_len; i++){
     // check if this entry is empty
-    if(strcmp(list[i],'\0')){
+    if(list[i][0] == '\0'){
       // remove them (set it to nul string) and return success
       strcpy(list[i],add_num);
+      debugSerial.print("Added to list");
       return true;
     }
   }
@@ -694,9 +752,9 @@ void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_
   if(addNumListEntry(list, list_len, add_num)){
     // send SMS indicating success to commander and the new authorized commander
     snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully added %s to %s", add_num, list_name);
-    sendSmsIfNetwork(sender, smsSendBuffer);
+    //sendSmsIfNetwork(sender, smsSendBuffer);
     snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully added you to %s", list_name);
-    sendSmsIfNetwork(sender, smsSendBuffer);
+    //sendSmsIfNetwork(sender, smsSendBuffer);
   }
   else{
     // send SMS indicating failure
