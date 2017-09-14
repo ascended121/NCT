@@ -135,13 +135,15 @@ boolean sendSmsIfNetwork(char *smsaddr, char *smsmsg);
 
 // Commands implementation
 void processSmsCmd();
-void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_name);
-void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char* list_name);
+void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char *list_name);
+void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char *list_name);
+void respondWithList(char list[][25], uint8_t list_len, char *list_name);
 
 // command helper
 boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num);
 boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num);
 boolean clearList(char list[][25], uint8_t list_len);
+uint8_t countListEntries(char list[][25], uint8_t list_len);
 
 // utility
 void useInterrupt(boolean);
@@ -653,6 +655,12 @@ void processSmsCmd(){
     extractPhoneNum(numberStr);
     removeAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, numberStr, "auth commanders list");
   }
+  /* Implement List Auth Commanders command
+   *  Syntax: "list auth", case insensitive
+   */
+  else if((str_loc = strcasestr(smsRcvBuffer,"list auth"))){
+    respondWithList(authCommanderList, MAX_AUTH_COMMANDERS, "auth commanders list");
+  }
   /* Implement Add SMS Recipient command
    *  Syntax: "add sms <cell_number>", case insensitive, cell number with dash delimiters
    */
@@ -666,6 +674,12 @@ void processSmsCmd(){
   else if((str_loc = strcasestr(smsRcvBuffer,"remove sms"))){
     extractPhoneNum(numberStr);
     removeAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, numberStr, "sms recipients list");
+  }
+  /* Implement List SMS Recipient command
+   *  Syntax: "list sms", case insensitive
+   */
+  else if((str_loc = strcasestr(smsRcvBuffer,"list sms"))){
+    respondWithList(smsRecipientsList, MAX_SMS_RECIPIENTS, "sms recipients list");
   }
   // Send a message back if the SMS didn't contain a valid command so that the user knows
   else{
@@ -758,7 +772,7 @@ void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_
   }
   else{
     // send SMS indicating failure
-    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Failed to add %s to %s", add_num, list_name);
+    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Failed to add %s to %s, list full", add_num, list_name);
     sendSmsIfNetwork(sender, smsSendBuffer);
   }
 }
@@ -768,17 +782,25 @@ void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_
  * Removes an entry from the specified list and notifies the user
  */
 void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char* list_name){
-  if(removeNumListEntry(list, list_len, remove_num)){
-    // send SMS indicating success
-    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully removed %s from %s", remove_num, list_name);
-    sendSmsIfNetwork(sender, smsSendBuffer);
-    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully removed you from %s", list_name);
+
+  // don't remove the last entry from a list
+  if(countListEntries(list, list_len) == 1){
+    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Failed, cannot remove last entry in list");
     sendSmsIfNetwork(sender, smsSendBuffer);
   }
   else{
-    // send SMS indicating failure
-    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Failed to remove %s from %s", remove_num, list_name);
-    sendSmsIfNetwork(sender, smsSendBuffer);
+    if(removeNumListEntry(list, list_len, remove_num)){
+      // send SMS indicating success
+      snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully removed %s from %s", remove_num, list_name);
+      sendSmsIfNetwork(sender, smsSendBuffer);
+      snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully removed you from %s", list_name);
+      sendSmsIfNetwork(sender, smsSendBuffer);
+    }
+    else{
+      // send SMS indicating failure
+      snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Failed to remove %s from %s", remove_num, list_name);
+      sendSmsIfNetwork(sender, smsSendBuffer);
+    }
   }
 }
 
@@ -801,6 +823,43 @@ boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num){
   }
   // if we made it here we didn't find them in the list, return failure
   return false;
+}
+
+/*
+ * countListEntries()
+ * Counts the number of non-empty entries in the list
+ */
+uint8_t countListEntries(char list[][25], uint8_t list_len){
+  uint8_t blankEntries = 0;
+  
+  // loop through the list
+  for( uint8_t i = 0; i < list_len; i++){
+    if(list[i][0] == '\0'){
+      blankEntries++;
+    }
+  }
+  return list_len - blankEntries;
+}
+
+/*
+ * respondWithList()
+ * sends an SMS with the contents of the specified list
+ */
+void respondWithList(char list[][25], uint8_t list_len, char *list_name){
+
+  snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%s: ", list_name);
+  // loop through the list
+  for( uint8_t i = 0; i < list_len; i++){
+    // check if its the one we're supposed to remove
+    if(list[i] != '\0')){
+      if(i != 0){
+        strncat(smsSendBuffer, ", ", 3);
+      }
+      strncat(smsSendBuffer, list[i], 11);
+      return true;
+    }
+  }
+  sendSmsIfNetwork(sender, smsSendBuffer);
 }
 
 
