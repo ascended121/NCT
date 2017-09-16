@@ -36,6 +36,11 @@ message with the location data.
 /*
  * Defines
  */
+// phone numbers with which to initalize the recipients and commanders lists
+// YOU MUST UPDATE THESE BEFORE DEPLOYING THE CODE
+#define DEFAULT_RECIPIENT_NUMBER "5555555555"
+#define DEFAULT_COMMANDER_NUMBER "5555555555"
+
 // pin aliases
 #define PIN_DEBUG_RX     0 // Mega TX0
 #define PIN_DEBUG_TX     1 // Mega RX0
@@ -719,11 +724,11 @@ void setupLists(){
   
   // populate the recipients list
   clearList(smsRecipientsList, MAX_SMS_RECIPIENTS);
-  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, "6033218095");
+  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER);
 
   // populate the authorized commanders list
   clearList(authCommanderList, MAX_AUTH_COMMANDERS);
-  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, "6033218095");
+  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, DEFAULT_COMMANDER_NUMBER);
 
 }
 
