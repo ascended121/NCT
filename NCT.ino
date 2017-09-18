@@ -772,12 +772,13 @@ boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num, uint16
       /*
        * write the number to eeprom to preserve it
       uint8_t char_pos = 0;
-      uint16_t eeprom_addr = EEPROM_RECIPIENTS_START_ADDR + PHONE_NUM_MAX_LEN*i;
+      uint16_t eeprom_addr = start_eeprom_addr + PHONE_NUM_MAX_LEN*i;
 
       while( add_num[char_pos] != '\0'){
        EEPROM.update(eeprom_addr + char_pos, add_num[char_pos]);
        char_pos++;
       }
+      // add the terminating character that we skipped above
       EEPROM.update(eeprom_addr + char_pos, '\0');
       */
       
@@ -792,11 +793,11 @@ boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num, uint16
  * clearList()
  * Clear all entries from the given list
  */
-boolean clearList(char list[][25], uint8_t list_len){
+boolean clearList(char list[][25], uint8_t list_len, uint16_t start_eeprom_addr){
   // loop through the list
   for( uint8_t i = 0; i < list_len; i++){
     list[i][0] = '\0';
-    //EEPROM.update(EEPROM_RECIPIENTS_START_ADDR + PHONE_NUM_MAX_LEN*i, '\0');
+    //EEPROM.update(start_eeprom_addr + PHONE_NUM_MAX_LEN*i, '\0');
   }
   return true; 
 }
@@ -895,7 +896,7 @@ void respondWithList(char list[][25], uint8_t list_len, char *list_name){
   // loop through the list
   for( uint8_t i = 0; i < list_len; i++){
     // check if its the one we're supposed to remove
-    if(list[i] != '\0')){
+    if(list[i] != '\0'){
       if(i != 0){
         strncat(smsSendBuffer, ", ", 3);
       }
