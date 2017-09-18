@@ -59,6 +59,7 @@ message with the location data.
 // constants
 #define MSEC_PER_SEC       1000
 #define MSEC_PER_MIN       60*MSEC_PER_SEC
+#define PHONE_NUM_MAX_LEN  25
 
 // FONA Network status
 #define FONA_NET_NOTREG       0
@@ -74,6 +75,8 @@ message with the location data.
 #define SMS_BUFF_SIZE 140
 #define LOG_BUFF_SIZE 250
 #define LOGFILE_NAME "datalog.csv"
+#define EEPROM_RECIPIENTS_START_ADDR 0
+#define EEPROM_COMMANDERS_START_ADDR (EEPROM_RECIPIENTS_START_ADDR+PHONE_NUM_MAX_LEN*MAX_SMS_RECIPIENTS)
 
 // debugging
 #define GPSECHO false   
@@ -106,8 +109,8 @@ uint16_t  fonaBattVoltage   = 0;                // battery voltage level
 uint8_t   fonaRssi          = 0;                // signal strength
 
 // lists
-char      smsRecipientsList[MAX_SMS_RECIPIENTS][25];   // list of phone numbers to send SMS's to 
-char      authCommanderList[MAX_AUTH_COMMANDERS][25];  // list of phone numbers to accept commands from
+char      smsRecipientsList[MAX_SMS_RECIPIENTS][PHONE_NUM_MAX_LEN];   // list of phone numbers to send SMS's to 
+char      authCommanderList[MAX_AUTH_COMMANDERS][PHONE_NUM_MAX_LEN];  // list of phone numbers to accept commands from
 
 // timers
 uint32_t  smsPeriod_msec       = 5*MSEC_PER_MIN;   // default to 5min between SMS
@@ -140,14 +143,14 @@ boolean sendSmsIfNetwork(char *smsaddr, char *smsmsg);
 
 // Commands implementation
 void processSmsCmd();
-void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char *list_name);
-void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char *list_name);
+void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char *list_name, uint16_t start_eeprom_addr);
+void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char *list_name, uint16_t start_eeprom_addr);
 void respondWithList(char list[][25], uint8_t list_len, char *list_name);
 
 // command helper
-boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num);
-boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num);
-boolean clearList(char list[][25], uint8_t list_len);
+boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num, uint16_t start_eeprom_addr);
+boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num, uint16_t start_eeprom_addr);
+boolean clearList(char list[][25], uint8_t list_len, uint16_t start_eeprom_addr);
 uint8_t countListEntries(char list[][25], uint8_t list_len);
 
 // utility
@@ -653,14 +656,14 @@ void processSmsCmd(){
    */
   else if((str_loc = strcasestr(smsRcvBuffer,"add auth"))){
     extractPhoneNum(numberStr);
-    addAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, numberStr, "auth commanders list");
+    addAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, numberStr, "auth commanders list", EEPROM_COMMANDERS_START_ADDR);
   }
   /* Implement Remove Auth Num command
    *  Syntax: "remove auth <cell_number>", case insensitive, cell number with dash delimiters
    */
   else if((str_loc = strcasestr(smsRcvBuffer,"remove auth"))){
     extractPhoneNum(numberStr);
-    removeAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, numberStr, "auth commanders list");
+    removeAndRespond(authCommanderList, MAX_AUTH_COMMANDERS, numberStr, "auth commanders list", EEPROM_COMMANDERS_START_ADDR);
   }
   /* Implement List Auth Commanders command
    *  Syntax: "list auth", case insensitive
@@ -673,14 +676,14 @@ void processSmsCmd(){
    */
   else if((str_loc = strcasestr(smsRcvBuffer,"add sms"))){
     extractPhoneNum(numberStr);
-    addAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, numberStr, "sms recipients list");
+    addAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, numberStr, "sms recipients list", EEPROM_RECIPIENTS_START_ADDR);
   }
   /* Implement Remove SMS Recipient command
    *  Syntax: "remove sms <cell_number>", case insensitive, cell number with dash delimiters
    */
   else if((str_loc = strcasestr(smsRcvBuffer,"remove sms"))){
     extractPhoneNum(numberStr);
-    removeAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, numberStr, "sms recipients list");
+    removeAndRespond(smsRecipientsList, MAX_SMS_RECIPIENTS, numberStr, "sms recipients list", EEPROM_RECIPIENTS_START_ADDR);
   }
   /* Implement List SMS Recipient command
    *  Syntax: "list sms", case insensitive
@@ -720,15 +723,34 @@ void extractPhoneNum(char *numberStr){
 void setupLists(){
   // FIXME: should read the values from last run from eeprom on startup
   //EEPROM.length()
-  //value = EEPROM.read(address);
+  /*
+
+   char c;
+   uint8_t char_pos = 0;
+   for(uint8_t i = 0; i < MAX_SMS_RECIPIENTS; i++){
+     c = EEPROM.read(EEPROM_RECIPIENTS_START_ADDR + PHONE_NUM_MAX_LEN*i + char_pos);
+     while( char_pos < PHONE_NUM_MAX_LEN && c != '\0'){
+       smsRecipientsList[i][char_pos] = c;
+       char_pos++;
+     }
+   }
+   for(uint8_t i = 0; i < MAX_AUTH_COMMANDERS; i++){
+     c = EEPROM.read(EEPROM_COMMANDERS_START_ADDR + PHONE_NUM_MAX_LEN*i + char_pos);
+     while( char_pos < PHONE_NUM_MAX_LEN && c != '\0'){
+       authCommanderList[i][ii] = c;
+       char_pos++;
+     }
+   }
+
+  */
   
   // populate the recipients list
-  clearList(smsRecipientsList, MAX_SMS_RECIPIENTS);
-  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER);
+  clearList(smsRecipientsList, MAX_SMS_RECIPIENTS, EEPROM_RECIPIENTS_START_ADDR);
+  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER, EEPROM_RECIPIENTS_START_ADDR);
 
   // populate the authorized commanders list
-  clearList(authCommanderList, MAX_AUTH_COMMANDERS);
-  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, DEFAULT_COMMANDER_NUMBER);
+  clearList(authCommanderList, MAX_AUTH_COMMANDERS, EEPROM_COMMANDERS_START_ADDR);
+  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, DEFAULT_COMMANDER_NUMBER, EEPROM_COMMANDERS_START_ADDR);
 
 }
 
@@ -736,7 +758,7 @@ void setupLists(){
  * addNumListEntry()
  * Add an entry to the specified list
  */
-boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num){
+boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num, uint16_t start_eeprom_addr){
   // FIXME: should write values to eeprom
   
   // loop through the list
@@ -746,6 +768,19 @@ boolean addNumListEntry(char list[][25], uint8_t list_len, char *add_num){
       // remove them (set it to nul string) and return success
       strcpy(list[i],add_num);
       debugSerial.print("Added to list");
+
+      /*
+       * write the number to eeprom to preserve it
+      uint8_t char_pos = 0;
+      uint16_t eeprom_addr = EEPROM_RECIPIENTS_START_ADDR + PHONE_NUM_MAX_LEN*i;
+
+      while( add_num[char_pos] != '\0'){
+       EEPROM.update(eeprom_addr + char_pos, add_num[char_pos]);
+       char_pos++;
+      }
+      EEPROM.update(eeprom_addr + char_pos, '\0');
+      */
+      
       return true;
     }
   }
@@ -761,6 +796,7 @@ boolean clearList(char list[][25], uint8_t list_len){
   // loop through the list
   for( uint8_t i = 0; i < list_len; i++){
     list[i][0] = '\0';
+    //EEPROM.update(EEPROM_RECIPIENTS_START_ADDR + PHONE_NUM_MAX_LEN*i, '\0');
   }
   return true; 
 }
@@ -769,8 +805,8 @@ boolean clearList(char list[][25], uint8_t list_len){
  * addAndRespond()
  * Adds an entry to a specified list and send an SMS message back to the user to confirm
  */
-void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_name){
-  if(addNumListEntry(list, list_len, add_num)){
+void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_name, uint16_t start_eeprom_addr){
+  if(addNumListEntry(list, list_len, add_num, start_eeprom_addr)){
     // send SMS indicating success to commander and the new authorized commander
     snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully added %s to %s", add_num, list_name);
     //sendSmsIfNetwork(sender, smsSendBuffer);
@@ -788,7 +824,7 @@ void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_
  * removeAndRespond()
  * Removes an entry from the specified list and notifies the user
  */
-void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char* list_name){
+void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char* list_name, uint16_t eeprom_start_addr){
 
   // don't remove the last entry from a list
   if(countListEntries(list, list_len) == 1){
@@ -796,7 +832,7 @@ void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char*
     sendSmsIfNetwork(sender, smsSendBuffer);
   }
   else{
-    if(removeNumListEntry(list, list_len, remove_num)){
+    if(removeNumListEntry(list, list_len, remove_num, eeprom_start_addr)){
       // send SMS indicating success
       snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Successfully removed %s from %s", remove_num, list_name);
       sendSmsIfNetwork(sender, smsSendBuffer);
@@ -816,7 +852,7 @@ void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char*
  * Removes an entry from the specified list. Note, this does not protect against 
  * removing everyone from a list, which could be a problem for the AuthCommand list.
  */
-boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num){
+boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num, uint16_t eeprom_start_addr){
   // FIXME: should write values to eeprom
   
   // loop through the list
@@ -825,6 +861,7 @@ boolean removeNumListEntry(char list[][25], uint8_t list_len, char *remove_num){
     if(strcmp(list[i],remove_num)){
       // remove them (set it to nul string) and return success
       list[i][0] = '\0';
+      //EEPROM.update(eeprom_start_addr + PHONE_NUM_MAX_LEN*i, '\0');
       return true;
     }
   }
