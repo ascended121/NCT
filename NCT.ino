@@ -32,15 +32,12 @@ message with the location data.
  
 // other includes
 #include <EEPROM.h>
+#include "default_phone_numbers.h"
+// NOTE: THESE MUST BE UDPDATED BEFORE DEPLOYING THE CODE
 
 /*
  * Defines
  */
-// phone numbers with which to initalize the recipients and commanders lists
-// YOU MUST UPDATE THESE BEFORE DEPLOYING THE CODE
-#define DEFAULT_RECIPIENT_NUMBER "5555555555"
-#define DEFAULT_COMMANDER_NUMBER "5555555555"
-
 // pin aliases
 #define PIN_DEBUG_RX     0 // Mega TX0
 #define PIN_DEBUG_TX     1 // Mega RX0
@@ -746,11 +743,13 @@ void setupLists(){
   
   // populate the recipients list
   clearList(smsRecipientsList, MAX_SMS_RECIPIENTS, EEPROM_RECIPIENTS_START_ADDR);
-  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER, EEPROM_RECIPIENTS_START_ADDR);
+  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER_1, EEPROM_RECIPIENTS_START_ADDR);
+  addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER_2, EEPROM_RECIPIENTS_START_ADDR);
 
   // populate the authorized commanders list
   clearList(authCommanderList, MAX_AUTH_COMMANDERS, EEPROM_COMMANDERS_START_ADDR);
-  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, DEFAULT_COMMANDER_NUMBER, EEPROM_COMMANDERS_START_ADDR);
+  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, DEFAULT_COMMANDER_NUMBER_1, EEPROM_COMMANDERS_START_ADDR);
+  addNumListEntry(authCommanderList, MAX_AUTH_COMMANDERS, DEFAULT_COMMANDER_NUMBER_2, EEPROM_COMMANDERS_START_ADDR);
 
 }
 
