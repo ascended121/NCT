@@ -75,8 +75,9 @@ message with the location data.
 #define SMS_BUFF_SIZE       140
 #define LOG_BUFF_SIZE       250
 #define LOGFILE_NAME    "datalog.csv"
-#define EEPROM_RECIPIENTS_START_ADDR 0
-#define EEPROM_COMMANDERS_START_ADDR (EEPROM_RECIPIENTS_START_ADDR+PHONE_NUM_MAX_LEN*MAX_SMS_RECIPIENTS)
+#define EEPROM_RECIPIENTS_START_ADDR  0
+#define EEPROM_COMMANDERS_START_ADDR  (EEPROM_RECIPIENTS_START_ADDR+PHONE_NUM_MAX_LEN*MAX_SMS_RECIPIENTS)
+#define EEPROM_LAST_SMS_TIME_ADDR     (EEPROM_COMMANDERS_START_ADDR+PHONE_NUM_MAX_LEN*MAX_AUTH_COMMANDERS)
 
 // debugging
 #define GPSECHO false   
@@ -115,7 +116,7 @@ char      authCommanderList[MAX_AUTH_COMMANDERS][PHONE_NUM_MAX_LEN];  // list of
 // timers
 uint32_t  smsPeriod_msec       = 5*MSEC_PER_MIN;   // default to 5min between SMS
 uint32_t  fonaStatusPeriod_msec= 10*MSEC_PER_SEC;  // default to 10sec between fona status checks
-uint32_t  smsTimer             = 0;                // initalize to zero to make this trigger on first loop
+uint32_t  smsTimer;                                // this will be initialized in setup from eeprom memory
 uint32_t  fonaStatusTimer      = 0;                // initalize to zero to make this trigger on first loop
 
 // buffers
@@ -126,8 +127,9 @@ char      sender[25];                           // buffer to store phone number 
 
 // program control flags
 volatile boolean smsAvail   = false;            // flag, set by the SMS interrupt, to read an SMS
-boolean   smsEnableFlag     = false;             // flag which enables the sending of telemetry SMS's to the recipients
+boolean   smsEnableFlag     = false;            // flag which enables the sending of telemetry SMS's to the recipients
 boolean   forceSendSms      = false;            // flag which forces the sending of a telemetry SMS to the recipients
+boolean   missedSmsSend     = false;            // flag indicating if an SMS sending opportunity was missed due to lack of network
  
 /* 
  *  Function prototypes
@@ -178,6 +180,10 @@ void setup() {
   setupSd();
 
   setupLists();
+
+  // set smsTimer from last send time in EEPROM
+  // This prevent rolling blackouts from spamming SMS's
+  EEPROM.get(EEPROM_LAST_SMS_TIME_ADDR, smsTimer);
   
   // Attach an interrupt to the ISR vector to trigger checking for SMSs
   attachInterrupt(digitalPinToInterrupt(PIN_FONA_INTRPT), smsAvailIsr, LOW);
@@ -193,6 +199,7 @@ void setup() {
 void loop() {
 
   // flag indicating if there was new GPS data produced this cycle which has been processed
+  // initalize to false, will be set later
   boolean parsedGpsData = false;
 
   /*
@@ -227,10 +234,11 @@ void loop() {
 
   /*
    * The interrupt routine will record if an SMS has been received by setting smsAvail
-   * to true, and the SMS will be read and processed here
+   * to true. This is the logic to read and process the SMS
    */
   if (smsAvail){
 
+    // determine number of SMS that need to be read
     uint8_t totalSms = fona.getNumSMS();
 
     debugSerial.print("Reading ");
@@ -239,14 +247,15 @@ void loop() {
 
     // reset the flag
     smsAvail = false;
-    
-    // iterate through the SMS slots on the FONA
+
+    // Initalize a variable to keep track of which slot is being read
     // Note: Apparently the module starts numbering SMS at 1
     int slot = 1;     
 
     // because slots can be empty, keep track of how many messages have been read
     uint8_t numSmsRead = 0;
-    
+
+    // iterate through the SMS slots on the FONA
     while (numSmsRead < fona.getNumSMS()) {
      
         debugSerial.print(F("\n\rReading SMS #")); 
@@ -265,6 +274,8 @@ void loop() {
         }
         // otherwise, we read a message
         else{
+
+          // record that a message has been read
           numSmsRead++;
 
           // get the phone number which sent the SMS
@@ -278,17 +289,18 @@ void loop() {
        
           // delete the original msg after it is processed, otherwise, we will fill 
           //  up all the SMS slots and then we won't be able to receive SMS anymore
-          if (fona.deleteSMS(slot)) {
-            debugSerial.println(F("OK!"));
-          } else {
+          if (!fona.deleteSMS(slot)) {
             debugSerial.print(F("Couldn't delete SMS in slot "));
             debugSerial.println(slot);
           }
         } //if (len == 0)
+
+        // iterate onto the next slot
         slot++;
+        
     } // while (numSmsRead < fona.getNumSMS())
   } // if (smsAvail)
-
+  
   /*
    * An SMS with the payload telemetry will be sent if a command to force an
    * SMS send has been received or if the SMS messages have been enabled and 
@@ -300,30 +312,39 @@ void loop() {
    * Send a telemetry message
    * If we need to send a message and we have network, create and send it
    */
-  if(sendSms && haveNetwork()){
-
-    // update timer
-    smsTimer = millis();
-
-    /*
-     * Create the SMS to send
-     * note that if you try to make too long of a message, it will be truncated
-     */
-    snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%04d %04d/%02d/%02d %02d:%02d:%02d-Lat:%8.4fdeg,Lon:%8.4fdeg,Alt:%06dft,Head:%5.3fdeg,Spd:%5.2fmph,FxQual:%02d,Sat:%02d,Batt:%05dmV,Log:%01d,RSSI:%03d", 
-    smsSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, 
-    GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, 
-    (boolean)dataFile, fonaRssi);
-    debugSerial.print(F("SMS: "));
-    debugSerial.println(smsSendBuffer);
-
-    // send the message to all recipients in our table
-    for(uint8_t i = 0; i < MAX_SMS_RECIPIENTS; i++){
-      fona.sendSMS(smsRecipientsList[i], smsSendBuffer);
+  if(sendSms || missedSmsSend){
+    if(haveNetwork()){
+      // update timer
+      smsTimer = millis();
+  
+      /*
+       * Create the SMS to send
+       * note that if you try to make too long of a message, it will be truncated
+       */
+      snprintf(smsSendBuffer, SMS_BUFF_SIZE, "%04d %04d/%02d/%02d %02d:%02d:%02d-Lat:%8.4fdeg,Lon:%8.4fdeg,Alt:%06dft,Head:%5.3fdeg,Spd:%5.2fmph,FxQual:%02d,Sat:%02d,Batt:%05dmV,Log:%01d,RSSI:%03d", 
+      smsSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, 
+      GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, 
+      (boolean)dataFile, fonaRssi);
+      debugSerial.print(F("SMS: "));
+      debugSerial.println(smsSendBuffer);
+  
+      // send the message to all recipients in our table
+      for(uint8_t i = 0; i < MAX_SMS_RECIPIENTS; i++){
+        fona.sendSMS(smsRecipientsList[i], smsSendBuffer);
+        // write time of sending to eeprom
+        EEPROM.puts(EEPROM_LAST_SMS_TIME_ADDR, smsTimer);
+      }
+  
+      // reset the force flag
+      forceSendSms = false;
+      missedSmsSend = false;
+      smsSeqCtr++;
+    }
+    else{
+        // set flag indicating a send was missed
+        missedSmsSend = true;
     }
 
-    // reset the force flag
-    forceSendSms = false;
-    smsSeqCtr++;
   }
 
   /*
