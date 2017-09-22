@@ -67,11 +67,12 @@ message with the location data.
 #define FONA_NET_ROAMING      5 
 
 // program parameters
-#define MAX_AUTH_COMMANDERS 5
-#define MAX_SMS_RECIPIENTS 5
-#define SMS_BUFF_SIZE 140
-#define LOG_BUFF_SIZE 250
-#define LOGFILE_NAME "datalog.csv"
+#define MAX_AUTH_COMMANDERS   5
+#define MAX_SMS_RECIPIENTS    5
+#define MIN_AUTH_COMMANDERS   2
+#define SMS_BUFF_SIZE       140
+#define LOG_BUFF_SIZE       250
+#define LOGFILE_NAME    "datalog.csv"
 #define EEPROM_RECIPIENTS_START_ADDR 0
 #define EEPROM_COMMANDERS_START_ADDR (EEPROM_RECIPIENTS_START_ADDR+PHONE_NUM_MAX_LEN*MAX_SMS_RECIPIENTS)
 
@@ -741,7 +742,7 @@ void setupLists(){
 
   */
   
-  // populate the recipients list
+  // populate the recipients listr
   clearList(smsRecipientsList, MAX_SMS_RECIPIENTS, EEPROM_RECIPIENTS_START_ADDR);
   addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER_1, EEPROM_RECIPIENTS_START_ADDR);
   addNumListEntry(smsRecipientsList, MAX_SMS_RECIPIENTS, DEFAULT_RECIPIENT_NUMBER_2, EEPROM_RECIPIENTS_START_ADDR);
@@ -827,7 +828,7 @@ void addAndRespond(char list[][25], uint8_t list_len, char *add_num, char* list_
 void removeAndRespond(char list[][25], uint8_t list_len, char *remove_num, char* list_name, uint16_t eeprom_start_addr){
 
   // don't remove the last entry from a list
-  if(countListEntries(list, list_len) == 1){
+  if(countListEntries(list, list_len) <= MIN_AUTH_COMMANDERS){
     snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Failed, cannot remove last entry in list");
     sendSmsIfNetwork(sender, smsSendBuffer);
   }
