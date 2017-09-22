@@ -108,6 +108,7 @@ uint16_t  logSeqCtr         = 0;                // Log file entry sequence count
 uint8_t   netStatus         = FONA_NET_UNKNOWN; // status of connection to cell network
 uint16_t  fonaBattVoltage   = 0;                // battery voltage level
 uint8_t   fonaRssi          = 0;                // signal strength
+uint16_t  rcvdSmsCtr        = 0;                // counter tracking number of received SMS
 
 // lists
 char      smsRecipientsList[MAX_SMS_RECIPIENTS][PHONE_NUM_MAX_LEN];   // list of phone numbers to send SMS's to 
@@ -277,6 +278,7 @@ void loop() {
 
           // record that a message has been read
           numSmsRead++;
+          rcvdSmsCtr++;
 
           // get the phone number which sent the SMS
           if (! fona.getSMSSender(slot, sender, sizeof(sender))) {
@@ -353,10 +355,10 @@ void loop() {
   if (parsedGpsData){  
 
     // note that if you try to make too long of a message, it will be truncated
-    snprintf(logBuffer, LOG_BUFF_SIZE, "%04d,%02d,%02d,%02d,%02d,%02d,%02d,%8.4f,%8.4f,%06d,%5.3f,%5.2f,%02d,%02d,%05d,%01d", 
+    snprintf(logBuffer, LOG_BUFF_SIZE, "%04d,%02d,%02d,%02d,%02d,%02d,%02d,%8.4f,%8.4f,%06d,%5.3f,%5.2f,%02d,%02d,%05d,%01d,%05d", 
     logSeqCtr, GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds, GPS.latitudeDegrees, 
     GPS.longitudeDegrees, GPS.altitude, GPS.angle, GPS.speed, GPS.fixquality, GPS.satellites, fonaBattVoltage, 
-    (boolean)dataFile, fonaRssi, netStatus);
+    (boolean)dataFile, fonaRssi, netStatus, rcvdSmsCtr);
     debugSerial.print(F("Log: "));
     debugSerial.println(logBuffer);
     
