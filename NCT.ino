@@ -67,6 +67,8 @@ message with the location data.
 #define FONA_NET_ROAMING      5 
 
 // program parameters
+#define SMS_FREQ_MIN         10
+#define SMS_FREQ_MAX       3600
 #define MAX_AUTH_COMMANDERS   5
 #define MAX_SMS_RECIPIENTS    5
 #define MIN_AUTH_COMMANDERS   2
@@ -629,7 +631,7 @@ void processSmsCmd(){
   else if(strcasestr(smsRcvBuffer,"sms freq")){
     uint16_t period = 0;
     sscanf(smsRcvBuffer,"%d", period);
-    if(period > 10 && period < 600){
+    if(period > SMS_FREQ_MIN && period < SMS_FREQ_MAX){
       smsPeriod_msec = period;
       snprintf(smsSendBuffer, SMS_BUFF_SIZE, "Set period value to %d", period);
       sendSmsIfNetwork(sender, smsSendBuffer);
